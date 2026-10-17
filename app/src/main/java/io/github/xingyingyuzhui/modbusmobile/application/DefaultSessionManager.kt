@@ -251,7 +251,7 @@ class DefaultSessionManager(
 
     override suspend fun setSlaveUnits(units: List<Int>): Boolean {
         if (units.isEmpty() || units.any { it !in 1..247 } || units.toSet().size != units.size) return false
-        gate.withLock {
+        return gate.withLock {
             val running = _state.value as? SessionState.Running ?: return false
             if (running.role != Role.SLAVE) return false
             val transport = slaveTransport ?: return false
@@ -263,9 +263,8 @@ class DefaultSessionManager(
             engine.start(scope)
             slaveEngine = engine
             _slaveUnits.value = units
+            saveSlaveSetup()
         }
-        saveSlaveSetup()
-        return true
     }
 
     override fun saveSlaveSetup(): Boolean {

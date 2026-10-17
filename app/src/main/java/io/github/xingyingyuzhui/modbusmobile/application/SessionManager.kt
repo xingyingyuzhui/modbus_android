@@ -32,7 +32,7 @@ interface SessionManager {
 
     /**
      * 改从站模拟的 Unit 集合（1..247，不重复，至少一个）。从站运行中会在两帧之间重建从站引擎，然后保存配置。
-     * 不在从站会话里、或参数不合法时返回 false。
+     * 不在从站会话里、参数不合法或保存失败时返回 false。保存失败时运行中的 Unit 已更新，界面应提示未落盘。
      */
     suspend fun setSlaveUnits(units: List<Int>): Boolean = false
 

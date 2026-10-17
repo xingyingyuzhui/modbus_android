@@ -12,7 +12,7 @@ import io.github.xingyingyuzhui.modbusmobile.ui.UiText
 import kotlin.random.Random
 
 /** 规则编辑页里会报错的字段。 */
-enum class RuleField { ADDRESS, COUNT, A, B, C, D, SEQUENCE, REFRESH, NOISE, CLAMP }
+enum class RuleField { UNIT, ADDRESS, COUNT, A, B, C, D, SEQUENCE, REFRESH, NOISE, CLAMP }
 
 /**
  * 模拟规则编辑页（b5-5）的草稿，全部是用户输入的原文，点“保存”时才校验成 [SimulationRule]。
@@ -63,7 +63,8 @@ data class RuleDraft(
     /** 校验并生成规则；有错时返回 null，并把错误写进 [errors]。[newId] 只在新建时用。 */
     fun build(newId: () -> String): Pair<SimulationRule?, RuleDraft> {
         val errors = LinkedHashMap<RuleField, UiText>()
-        fun number(field: RuleField, text: String): Double? = text.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
+        if (unit !in 1..247) errors[RuleField.UNIT] = UiText.Of(R.string.error_slave_unit_range)
+        fun number(field: RuleField, text: String): Double? = text.trim().toDoubleOrNull()?.takeIf { it.isFinite() && kotlin.math.abs(it) <= MaxMagnitude }
             ?: null.also { errors[field] = UiText.Of(R.string.rule_err_number) }
         val address = address.trim().toIntOrNull()?.takeIf { it in 0..0xFFFF }
             ?: null.also { errors[RuleField.ADDRESS] = UiText.Of(R.string.rule_err_address) }
@@ -112,7 +113,7 @@ data class RuleDraft(
             }
             WaveKind.SEQUENCE -> {
                 val values = sequence.split(',', '，', ' ', '\n').filter { it.isNotBlank() }.map { it.trim().toDoubleOrNull() }
-                if (values.isEmpty() || values.any { it == null || !it.isFinite() } || values.size > MaxSequence) {
+                if (values.isEmpty() || values.any { it == null || !it.isFinite() || kotlin.math.abs(it) > MaxMagnitude } || values.size > MaxSequence) {
                     errors[RuleField.SEQUENCE] = UiText.Of(R.string.rule_err_sequence, listOf(MaxSequence))
                     null
                 } else Waveform.Sequence(values.map { it!! })
@@ -120,11 +121,11 @@ data class RuleDraft(
         }
         val refresh = refreshMs.trim().toLongOrNull()?.takeIf { it >= SimulationRule.MIN_REFRESH_MS && it <= MaxRefreshMs }
             ?: null.also { errors[RuleField.REFRESH] = UiText.Of(R.string.rule_err_refresh, listOf(SimulationRule.MIN_REFRESH_MS, MaxRefreshMs)) }
-        val noise = noise.trim().toDoubleOrNull()?.takeIf { it >= 0.0 && it.isFinite() }
+        val noise = noise.trim().toDoubleOrNull()?.takeIf { it in 0.0..MaxMagnitude && it.isFinite() }
             ?: null.also { errors[RuleField.NOISE] = UiText.Of(R.string.rule_err_noise) }
         val bit = area.isBitArea()
-        val lo = if (bit) 0.0 else clampMin.trim().toDoubleOrNull()
-        val hi = if (bit) 1.0 else clampMax.trim().toDoubleOrNull()
+        val lo = if (bit) 0.0 else clampMin.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
+        val hi = if (bit) 1.0 else clampMax.trim().toDoubleOrNull()?.takeIf { it.isFinite() }
         if (lo == null || hi == null || lo < 0 || hi > 65_535 || hi < lo) errors[RuleField.CLAMP] = UiText.Of(R.string.rule_err_clamp)
         if (errors.isNotEmpty() || address == null || count == null || waveform == null || refresh == null || noise == null || lo == null || hi == null) {
             return null to copy(errors = errors)
@@ -147,6 +148,8 @@ data class RuleDraft(
         const val MinPeriodMs = 100L
         const val MaxRefreshMs = 3_600_000L
         const val MaxSequence = 256
+        // 留出派生计算余量，避免有限输入在波形运算中溢出成 NaN。
+        const val MaxMagnitude = 1e12
 
         fun newFor(unit: Int, area: RegisterArea, address: Int): RuleDraft =
             RuleDraft(id = null, unit = unit, area = area, address = address.toString(), kind = WaveKind.CONSTANT).withKind(WaveKind.SINE)
@@ -186,17 +189,22 @@ data class RuleDraft(
  * 返回 (时间 ms, 原始值)，最多 [maxPoints] 个点。
  */
 fun previewSamples(rule: SimulationRule, windowMs: Long = 20_000, maxPoints: Int = 400): List<Pair<Long, Int>> {
+    if (windowMs < 0 || maxPoints <= 0) return emptyList()
     val quiet = rule.copy(noise = 0.0)
     val random = Random(1)
-    val step = maxOf(rule.refreshMs, windowMs / maxPoints)
+    val lastTick = windowMs / rule.refreshMs
+    // 抽样仍落在真实刷新时刻；Ramp / Sequence 的 step 与时间属于同一拍。
+    val intervals = (maxPoints - 1).toLong()
+    val stride = if (intervals <= 0) 1L else
+        (lastTick / intervals + if (lastTick % intervals == 0L) 0 else 1).coerceAtLeast(1L)
     val out = ArrayList<Pair<Long, Int>>()
-    var t = 0L
-    var n = 0L
-    while (t <= windowMs && out.size < maxPoints) {
-        val value = Waveforms.value(quiet.waveform, t, n, random)
+    var tick = 0L
+    while (tick <= lastTick && out.size < maxPoints) {
+        val t = tick * rule.refreshMs
+        val value = Waveforms.value(quiet.waveform, t, tick, random)
         out += t to Waveforms.raw(quiet, value, random)
-        t += step
-        n += step / rule.refreshMs
+        if (lastTick - tick < stride) break
+        tick += stride
     }
     return out
 }

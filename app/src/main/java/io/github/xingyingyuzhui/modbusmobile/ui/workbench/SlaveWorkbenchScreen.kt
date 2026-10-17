@@ -29,6 +29,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import io.github.xingyingyuzhui.modbusmobile.ui.LocalAppViewModelStoreOwner
 import io.github.xingyingyuzhui.modbusmobile.R
 import io.github.xingyingyuzhui.modbusmobile.application.AddressStyle
 import io.github.xingyingyuzhui.modbusmobile.application.ConnectionTarget
@@ -66,15 +68,18 @@ import io.github.xingyingyuzhui.modbusmobile.ui.theme.Mono
 @Composable
 fun SlaveWorkbench(target: ConnectionTarget, landscape: Boolean) {
     val session = LocalSession.current
-    val model = viewModel { SlaveViewModel(session) }
+    val owner = LocalAppViewModelStoreOwner.current ?: checkNotNull(LocalViewModelStoreOwner.current)
+    val model = viewModel(viewModelStoreOwner = owner) { SlaveViewModel(session) }
     val settings = LocalUiSettings.current
     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
-        if (landscape) {
+        if (model.ruleDraft != null) {
+            SimulationRuleEditor(model)
+        } else if (landscape) {
             SlaveLandscape(model, settings, target)
         } else {
             SlavePortrait(model, settings, target)
         }
-        SlaveSheets(model)
+        if (model.ruleDraft == null) SlaveSheets(model)
     }
 }
 
@@ -94,6 +99,7 @@ private fun SlavePortrait(model: SlaveViewModel, settings: UiSettings, target: C
             AreaSegment(model)
             AreaTable(model, settings, landscape = false)
             SecondaryButton(stringResource(R.string.slave_add_range), model::openAddRange, Modifier.fillMaxWidth(), compact = true)
+            SimulationRules(model)
         }
     }
 }
@@ -116,8 +122,9 @@ private fun SlaveLandscape(model: SlaveViewModel, settings: UiSettings, target: 
             AreaSegment(model)
             SecondaryButton(stringResource(R.string.slave_add_range), model::openAddRange, Modifier.fillMaxWidth(), compact = true)
         }
-        Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+        Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             AreaTable(model, settings, landscape = true)
+            SimulationRules(model)
         }
     }
 }

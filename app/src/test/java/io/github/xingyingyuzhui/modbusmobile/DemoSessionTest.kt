@@ -217,6 +217,29 @@ class DemoSessionTest {
         assertTrue("没有从站会话时不保存", !session.saveSlaveSetup())
     }
 
+    @Test
+    fun changingUnitsReportsPersistenceFailureAndCanRetrySaving() = runTest {
+        var writable = false
+        var saved: io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetup? = null
+        val store = object : io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetupStore {
+            override fun load() = io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetup.default()
+            override fun save(setup: io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetup): Boolean {
+                if (!writable) return false
+                saved = setup
+                return true
+            }
+        }
+        val session = session(store)
+        session.connect(ConnectionTarget.Demo, SerialSettings(), Role.SLAVE)
+        assertTrue("保存失败必须传给界面", !session.setSlaveUnits(listOf(1, 2)))
+        assertEquals("运行中的 Unit 已生效", listOf(1, 2), session.slaveUnits.value)
+        assertEquals(null, saved)
+        writable = true
+        assertTrue(session.saveSlaveSetup())
+        assertEquals(listOf(1, 2), saved!!.unitIds)
+        session.disconnect()
+    }
+
     private fun TestScope.session(
         store: io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetupStore =
             io.github.xingyingyuzhui.modbusmobile.application.slave.MemorySlaveSetupStore(),

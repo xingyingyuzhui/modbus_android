@@ -101,6 +101,14 @@ class SlaveViewModel(
     var ruleDraft by mutableStateOf<RuleDraft?>(null)
         private set
 
+    private var initialRuleDraft: RuleDraft? = null
+
+    val ruleDirty: Boolean
+        get() = ruleDraft?.copy(errors = emptyMap()) != initialRuleDraft?.copy(errors = emptyMap())
+
+    var confirmDiscardRule by mutableStateOf(false)
+        private set
+
     /** 最近一次保存失败时为 true（文件只读 / 写失败），界面提示一行。 */
     var saveFailed by mutableStateOf(false)
         private set
@@ -137,7 +145,7 @@ class SlaveViewModel(
             session.simulation.collectLatest { engine ->
                 if (engine == null) {
                     ruleStates = emptyList()
-                    ruleDraft = null
+                    discardRule()
                     return@collectLatest
                 }
                 engine.states.collect { states ->
@@ -316,50 +324,73 @@ class SlaveViewModel(
 
     fun openNewRule() {
         val first = rowsOf(area).firstOrNull()?.address ?: 0
-        ruleDraft = RuleDraft.newFor(unit, area, first)
+        beginRule(RuleDraft.newFor(unit, area, first))
     }
 
     fun openRule(id: String) {
-        val rule = ruleStates.firstOrNull { it.rule.id == id }?.rule ?: return
-        ruleDraft = RuleDraft.from(rule)
+        val rule = session.simulation.value?.states?.value?.firstOrNull { it.rule.id == id }?.rule ?: return
+        beginRule(RuleDraft.from(rule))
     }
 
     fun updateRule(update: RuleDraft.() -> RuleDraft) {
         ruleDraft = ruleDraft?.update()
     }
 
+    private fun beginRule(draft: RuleDraft) {
+        ruleDraft = draft
+        initialRuleDraft = draft
+        confirmDiscardRule = false
+        saveFailed = false
+    }
+
     fun cancelRule() {
+        if (ruleDirty) confirmDiscardRule = true else discardRule()
+    }
+
+    fun keepEditingRule() {
+        confirmDiscardRule = false
+    }
+
+    fun discardRule() {
         ruleDraft = null
+        initialRuleDraft = null
+        confirmDiscardRule = false
     }
 
     /** 校验通过才保存：替换同 id 的规则或追加，交给模拟器并保存从站配置。 */
     fun saveRule() {
         val draft = ruleDraft ?: return
         val engine = session.simulation.value ?: return
+        if (draft.unit !in units.value) {
+            ruleDraft = draft.copy(errors = draft.errors + (RuleField.UNIT to UiText.Of(R.string.error_slave_unit_range)))
+            return
+        }
         val (rule, checked) = draft.build { "r" + monotonicNs().toString(36) }
         if (rule == null) {
             ruleDraft = checked
             return
         }
-        val current = ruleStates.map { it.rule }
+        val current = engine.states.value.map { it.rule }
         val next = if (current.any { it.id == rule.id }) current.map { if (it.id == rule.id) rule else it } else current + rule
         engine.setRules(next)
-        ruleDraft = null
+        // “保存并运行”作用于本次会话；enabled 只决定下次连接时是否自动启动。
+        engine.resume(rule.id)
         save()
+        if (saveFailed) ruleDraft = checked.copy(id = rule.id) else discardRule()
     }
 
     fun deleteRule() {
         val id = ruleDraft?.id ?: return
         val engine = session.simulation.value ?: return
-        engine.setRules(ruleStates.map { it.rule }.filter { it.id != id })
-        ruleDraft = null
+        engine.setRules(engine.states.value.map { it.rule }.filter { it.id != id })
         save()
+        if (!saveFailed) discardRule()
     }
 
     /** 列表里点“暂停 / 恢复”。这是运行时状态，不改保存的“启动从站时自动运行”。 */
     fun toggleRule(id: String) {
         val engine = session.simulation.value ?: return
-        val state = ruleStates.firstOrNull { it.rule.id == id } ?: return
+        val state = engine.states.value.firstOrNull { it.rule.id == id } ?: return
         if (state.status == io.github.xingyingyuzhui.modbusmobile.core.slave.RuleStatus.RUNNING) engine.pause(id) else engine.resume(id)
     }
 
