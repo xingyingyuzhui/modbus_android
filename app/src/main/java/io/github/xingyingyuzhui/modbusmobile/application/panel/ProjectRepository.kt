@@ -53,6 +53,14 @@ class ProjectRepository(
         return ProjectLoad.Corrupt(reason, preserveCorrupt())
     }
 
+    /** 导出用的 JSON。主文件能读懂就用原文，否则用备份；都没有就写出空工程。不改动坏文件。 */
+    @Synchronized
+    fun exportJson(): String {
+        readTextIfDecodable(main)?.let { return it }
+        readTextIfDecodable(backup)?.let { return it }
+        return ProjectJson.encode(Project.empty())
+    }
+
     @Synchronized
     fun save(project: Project): ProjectSave {
         if (readOnly) return ProjectSave.ReadOnly
@@ -76,6 +84,12 @@ class ProjectRepository(
         data class Ok(val parsed: ProjectJson.Parsed) : Attempt
         data class Failed(val reason: String) : Attempt
         data object Missing : Attempt
+    }
+
+    private fun readTextIfDecodable(file: File): String? {
+        if (!file.exists()) return null
+        val text = file.readText(Charsets.UTF_8)
+        return text.takeIf { runCatching { ProjectJson.decode(it) }.isSuccess }
     }
 
     private fun tryRead(file: File): Attempt {

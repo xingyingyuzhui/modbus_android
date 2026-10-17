@@ -12,6 +12,9 @@ interface SlaveSetupStore {
 
     /** 保存成功返回 true；只读（文件来自更新版本）或写失败返回 false。 */
     fun save(setup: SlaveSetup): Boolean
+
+    /** 导出用的 JSON。文件实现优先返回磁盘上能读懂的原文。 */
+    fun exportJson(): String = SlaveSetupJson.encode(load())
 }
 
 class MemorySlaveSetupStore(initial: SlaveSetup = SlaveSetup.default()) : SlaveSetupStore {
@@ -78,6 +81,13 @@ class FileSlaveSetupStore(
     }
 
     @Synchronized
+    override fun exportJson(): String {
+        readTextIfDecodable(main)?.let { return it }
+        readTextIfDecodable(backup)?.let { return it }
+        return SlaveSetupJson.encode(SlaveSetup.default())
+    }
+
+    @Synchronized
     override fun save(setup: SlaveSetup): Boolean {
         if (readOnly) return false
         return try {
@@ -93,6 +103,12 @@ class FileSlaveSetupStore(
         } catch (e: Exception) {
             false
         }
+    }
+
+    private fun readTextIfDecodable(file: File): String? {
+        if (!file.exists()) return null
+        val text = file.readText(Charsets.UTF_8)
+        return text.takeIf { runCatching { SlaveSetupJson.decode(it) }.isSuccess }
     }
 
     private fun read(file: File): SlaveSetupJson.Parsed? {

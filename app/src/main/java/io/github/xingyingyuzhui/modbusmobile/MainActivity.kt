@@ -14,7 +14,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.xingyingyuzhui.modbusmobile.application.SessionState
+import io.github.xingyingyuzhui.modbusmobile.ui.LocalHistoryCatalog
 import io.github.xingyingyuzhui.modbusmobile.ui.LocalSession
+import io.github.xingyingyuzhui.modbusmobile.ui.LocalSlaveSetupStore
 import io.github.xingyingyuzhui.modbusmobile.ui.LocalTrafficRecorder
 import io.github.xingyingyuzhui.modbusmobile.ui.LocalPanelRuntime
 import io.github.xingyingyuzhui.modbusmobile.ui.LocalProjectRepository
@@ -44,6 +46,8 @@ class MainActivity : ComponentActivity() {
                 LocalSettingsRepository provides container.settingsRepository,
                 LocalProjectRepository provides container.projectRepository,
                 LocalPanelRuntime provides container.panelRuntime,
+                LocalHistoryCatalog provides container.historyCatalog,
+                LocalSlaveSetupStore provides container.slaveSetupStore,
             ) {
                 ModbusTheme(settings) {
                     ModbusApp()

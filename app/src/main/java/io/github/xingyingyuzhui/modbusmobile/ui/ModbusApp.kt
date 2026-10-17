@@ -74,6 +74,14 @@ val LocalSettingsRepository = staticCompositionLocalOf<SettingsRepository> {
     error("SettingsRepository 还没有提供")
 }
 
+/** 历史会话和存储用量。没有提供时「我的」页按空历史显示，不碰数据库。 */
+val LocalHistoryCatalog = staticCompositionLocalOf<io.github.xingyingyuzhui.modbusmobile.application.history.HistoryCatalog> {
+    io.github.xingyingyuzhui.modbusmobile.application.history.EmptyHistoryCatalog
+}
+
+/** 从站配置文件。没有提供时导出使用内置的默认映射，不读磁盘。 */
+val LocalSlaveSetupStore = staticCompositionLocalOf<io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetupStore?> { null }
+
 /** Activity 级的 ViewModelStoreOwner。工作台的表单、结果和轮询意图不随页面切换（含系统返回键）清空。 */
 val LocalAppViewModelStoreOwner = staticCompositionLocalOf<androidx.lifecycle.ViewModelStoreOwner?> { null }
 

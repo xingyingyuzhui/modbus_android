@@ -2,16 +2,20 @@ package io.github.xingyingyuzhui.modbusmobile.ui.mine
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -34,7 +38,12 @@ import io.github.xingyingyuzhui.modbusmobile.application.NumberFormat
 import io.github.xingyingyuzhui.modbusmobile.application.ThemeMode
 import io.github.xingyingyuzhui.modbusmobile.application.TimeStyle
 import io.github.xingyingyuzhui.modbusmobile.application.UiSettings
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryOverview
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistorySession
+import io.github.xingyingyuzhui.modbusmobile.application.history.RecordingState
+import io.github.xingyingyuzhui.modbusmobile.ui.LocalHistoryCatalog
 import io.github.xingyingyuzhui.modbusmobile.ui.LocalSettingsRepository
+import io.github.xingyingyuzhui.modbusmobile.ui.components.InPageSheet
 import io.github.xingyingyuzhui.modbusmobile.ui.components.AppearanceIcon
 import io.github.xingyingyuzhui.modbusmobile.ui.components.ColorSwatchRow
 import io.github.xingyingyuzhui.modbusmobile.ui.components.CommIcon
@@ -62,30 +71,73 @@ import io.github.xingyingyuzhui.modbusmobile.ui.theme.LocalModbusColors
 import io.github.xingyingyuzhui.modbusmobile.ui.theme.LocalSpacing
 
 /** 「我的」里的页面。HOME 是入口；SETTINGS 是把所有分组按顺序排在一页的完整设置页（稿面 b3-2）。 */
-enum class MinePage { HOME, SETTINGS, APPEARANCE, DISPLAY, SECURITY, COMM, ABOUT }
+enum class MinePage { HOME, SETTINGS, APPEARANCE, DISPLAY, SECURITY, COMM, ABOUT, HISTORY, STORAGE }
 
 private val GroupPages = listOf(MinePage.APPEARANCE, MinePage.DISPLAY, MinePage.SECURITY, MinePage.COMM, MinePage.ABOUT)
 
 @Composable
 fun MineScreen() {
     val repository = LocalSettingsRepository.current
-    val model = viewModel { MineViewModel(repository) }
+    val history = LocalHistoryCatalog.current
+    val model = viewModel(key = "mine-${System.identityHashCode(repository)}-${System.identityHashCode(history)}") {
+        MineViewModel(repository, history)
+    }
     val settings by model.settings.collectAsStateWithLifecycle()
+    val overview by model.overview.collectAsStateWithLifecycle()
+    val recording by model.recording.collectAsStateWithLifecycle()
+    val deviceExport = rememberDeviceExport()
+    val export = LocalMineExport.current ?: deviceExport
     val landscape = LocalShellMode.current == ShellMode.LANDSCAPE
     var pageName by rememberSaveable { mutableStateOf(MinePage.HOME.name) }
     val page = MinePage.entries.firstOrNull { it.name == pageName } ?: MinePage.HOME
-    if (landscape) {
-        MineLandscape(model, settings, page.takeIf { it in GroupPages } ?: MinePage.APPEARANCE) { pageName = it.name }
-    } else {
-        BackHandler(enabled = page != MinePage.HOME) { pageName = MinePage.HOME.name }
-        MinePortrait(model, settings, page) { pageName = it.name }
+    var showExport by rememberSaveable { mutableStateOf(false) }
+    var pointCount by remember { mutableIntStateOf(0) }
+    var pendingDelete by remember { mutableStateOf<Long?>(null) }
+    val go = { next: MinePage -> pageName = next.name }
+    val onDelete: (HistorySession) -> Unit = { session ->
+        if (!session.retained && session.endedAtMs != null) pendingDelete = session.id
+    }
+    LaunchedEffect(page) { model.refresh() }
+    LaunchedEffect(showExport) {
+        if (showExport) pointCount = export.pointCount()
+    }
+    Box(Modifier.fillMaxSize()) {
+        if (landscape) {
+            val detail = page.takeIf { it in GroupPages || it == MinePage.HISTORY || it == MinePage.STORAGE } ?: MinePage.APPEARANCE
+            MineLandscape(model, settings, overview, recording, detail, go, { showExport = true }, onDelete)
+        } else {
+            BackHandler(enabled = page != MinePage.HOME && !showExport && pendingDelete == null) { pageName = MinePage.HOME.name }
+            MinePortrait(model, settings, overview, recording, page, go, { showExport = true }, onDelete)
+        }
+        if (showExport) {
+            ExportSheet(pointCount, export::save, export::share) { showExport = false }
+        }
+        val deleting = pendingDelete
+        if (deleting != null) {
+            DeleteSessionSheet(
+                onConfirm = {
+                    pendingDelete = null
+                    model.deleteClosed(deleting)
+                },
+                onDismiss = { pendingDelete = null },
+            )
+        }
     }
 }
 
 // ---------------------------------------------------------------- 竖屏
 
 @Composable
-private fun MinePortrait(model: MineViewModel, settings: UiSettings, page: MinePage, go: (MinePage) -> Unit) {
+private fun MinePortrait(
+    model: MineViewModel,
+    settings: UiSettings,
+    overview: HistoryOverview,
+    recording: RecordingState,
+    page: MinePage,
+    go: (MinePage) -> Unit,
+    onExport: () -> Unit,
+    onDelete: (HistorySession) -> Unit,
+) {
     val spacing = LocalSpacing.current
     val colors = LocalModbusColors.current
     Column(Modifier.screenFrame()) {
@@ -99,6 +151,7 @@ private fun MinePortrait(model: MineViewModel, settings: UiSettings, page: MineP
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = dockClearance()),
                 verticalArrangement = Arrangement.spacedBy(spacing.gapS),
             ) {
+                MineDataSection(settings, overview, recording, null, onExport, { go(MinePage.HISTORY) }, { go(MinePage.STORAGE) })
                 SectionLabel(stringResource(R.string.mine_section_settings))
                 GroupList(settings, selected = null, onSelect = go)
             }
@@ -109,13 +162,15 @@ private fun MinePortrait(model: MineViewModel, settings: UiSettings, page: MineP
                 verticalArrangement = Arrangement.spacedBy(spacing.gapM),
             ) {
                 if (page == MinePage.SETTINGS) {
-                    // 完整设置页：外观 / 显示与格式 / 安全 / 通信默认值，各带一个小标题
+                    // 完整设置页：外观 / 显示与格式 / 安全 / 通信默认值 / 存储，各带一个小标题
                     listOf(MinePage.APPEARANCE, MinePage.DISPLAY, MinePage.SECURITY, MinePage.COMM).forEach { group ->
                         SectionLabel(pageTitle(group))
-                        GroupContent(group, model, settings)
+                        GroupContent(group, model, settings, overview, recording, onDelete)
                     }
+                    SectionLabel(stringResource(R.string.mine_storage_title))
+                    StorageSettings(model, settings)
                 } else {
-                    GroupContent(page, model, settings)
+                    GroupContent(page, model, settings, overview, recording, onDelete)
                 }
             }
         }
@@ -125,13 +180,26 @@ private fun MinePortrait(model: MineViewModel, settings: UiSettings, page: MineP
 // ---------------------------------------------------------------- 横屏：左分组，右直接显示设置
 
 @Composable
-private fun MineLandscape(model: MineViewModel, settings: UiSettings, page: MinePage, go: (MinePage) -> Unit) {
+private fun MineLandscape(
+    model: MineViewModel,
+    settings: UiSettings,
+    overview: HistoryOverview,
+    recording: RecordingState,
+    page: MinePage,
+    go: (MinePage) -> Unit,
+    onExport: () -> Unit,
+    onDelete: (HistorySession) -> Unit,
+) {
     val spacing = LocalSpacing.current
     val colors = LocalModbusColors.current
     Column(Modifier.screenFrame()) {
         PageHeader(stringResource(R.string.title_mine))
         Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(spacing.gapM)) {
-            Column(Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            Column(
+                Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = dockClearance()),
+                verticalArrangement = Arrangement.spacedBy(spacing.gapS),
+            ) {
+                MineDataSection(settings, overview, recording, page, onExport, { go(MinePage.HISTORY) }, { go(MinePage.STORAGE) })
                 GroupList(settings, selected = page, onSelect = go)
             }
             Column(
@@ -139,7 +207,7 @@ private fun MineLandscape(model: MineViewModel, settings: UiSettings, page: Mine
                 verticalArrangement = Arrangement.spacedBy(spacing.gapM),
             ) {
                 Text(pageTitle(page), color = colors.text, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.testTag("mine-detail-title"))
-                GroupContent(page, model, settings)
+                GroupContent(page, model, settings, overview, recording, onDelete)
             }
         }
     }
@@ -190,6 +258,8 @@ private fun pageTitle(page: MinePage): String = stringResource(
         MinePage.SECURITY -> R.string.mine_group_security
         MinePage.COMM -> R.string.mine_group_comm
         MinePage.ABOUT -> R.string.mine_group_about
+        MinePage.HISTORY -> R.string.mine_history
+        MinePage.STORAGE -> R.string.mine_storage_title
     },
 )
 
@@ -215,14 +285,34 @@ private fun appVersion(): String {
 // ---------------------------------------------------------------- 各分组的内容
 
 @Composable
-private fun GroupContent(group: MinePage, model: MineViewModel, settings: UiSettings) {
+private fun GroupContent(
+    group: MinePage,
+    model: MineViewModel,
+    settings: UiSettings,
+    overview: HistoryOverview,
+    recording: RecordingState,
+    onDelete: (HistorySession) -> Unit,
+) {
     when (group) {
         MinePage.APPEARANCE -> AppearanceGroup(model, settings)
         MinePage.DISPLAY -> DisplayGroup(model, settings)
         MinePage.SECURITY -> SecurityGroup(model, settings)
         MinePage.COMM -> CommGroup(model, settings)
         MinePage.ABOUT -> AboutGroup()
+        MinePage.HISTORY -> HistoryPage(model, overview, recording, onDelete)
+        MinePage.STORAGE -> StorageSettings(model, settings)
         else -> Unit
+    }
+}
+
+@Composable
+private fun DeleteSessionSheet(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    InPageSheet(stringResource(R.string.mine_history_delete_title), onDismiss, tag = "history-delete-sheet") {
+        Text(stringResource(R.string.mine_history_delete_body), color = LocalModbusColors.current.muted, fontSize = 14.sp, lineHeight = 20.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton(stringResource(R.string.action_cancel), onDismiss, Modifier.weight(1f).testTag("history-delete-cancel"), compact = true)
+            PrimaryButton(stringResource(R.string.mine_history_delete), onConfirm, Modifier.weight(1f).testTag("history-delete-confirm"), danger = true, compact = true)
+        }
     }
 }
 

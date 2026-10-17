@@ -18,9 +18,16 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.height
 import androidx.compose.ui.unit.width
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import com.github.takahirom.roborazzi.captureRoboImage
 import io.github.xingyingyuzhui.modbusmobile.application.ConnectionTarget
 import io.github.xingyingyuzhui.modbusmobile.application.MemorySettingsRepository
+import io.github.xingyingyuzhui.modbusmobile.application.export.ArchivePart
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryCatalog
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryOverview
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistorySample
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistorySession
+import io.github.xingyingyuzhui.modbusmobile.application.history.RecordingState
 import io.github.xingyingyuzhui.modbusmobile.application.SerialSettings
 import io.github.xingyingyuzhui.modbusmobile.application.SessionManager
 import io.github.xingyingyuzhui.modbusmobile.application.SessionState
@@ -33,10 +40,13 @@ import io.github.xingyingyuzhui.modbusmobile.core.model.Role
 import io.github.xingyingyuzhui.modbusmobile.core.model.TrafficEvent
 import io.github.xingyingyuzhui.modbusmobile.core.slave.VirtualRegisterBank
 import io.github.xingyingyuzhui.modbusmobile.ui.components.SwitchVisualTag
+import io.github.xingyingyuzhui.modbusmobile.ui.mine.LocalMineExport
+import io.github.xingyingyuzhui.modbusmobile.ui.mine.MineExport
 import io.github.xingyingyuzhui.modbusmobile.ui.shell.Destination
 import io.github.xingyingyuzhui.modbusmobile.ui.theme.ModbusTheme
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -68,13 +78,18 @@ class MinePageTest {
 
     private val repository = MemorySettingsRepository(UiSettings())
 
-    private fun show(theme: ThemeMode = ThemeMode.DARK) {
+    private fun show(
+        theme: ThemeMode = ThemeMode.DARK,
+        history: HistoryCatalog = EmptyMineHistory(),
+        export: MineExport? = null,
+    ) {
         val settings = UiSettings(theme = theme)
-        repository.let { }
         compose.setContent {
             CompositionLocalProvider(
                 LocalSession provides Idle(),
                 LocalSettingsRepository provides repository,
+                LocalHistoryCatalog provides history,
+                LocalMineExport provides export,
             ) { ModbusTheme(settings) { ModbusApp(startRoute = Destination.Mine.route) } }
         }
         compose.waitForIdle()
@@ -95,8 +110,13 @@ class MinePageTest {
         compose.onNodeWithText("显示与格式").assertIsDisplayed()
         compose.onNodeWithText("通信默认值").assertIsDisplayed()
         compose.onNodeWithTag("mine-settings").assertIsDisplayed()
-        // 没有数据来源的卡片一律不画：工程卡 / 导入 / 导出 / 历史会话 / 本地存储
-        listOf("导入", "导出与分享", "历史会话", "本地存储").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+        compose.onNodeWithText("导出与分享").assertIsDisplayed()
+        compose.onNodeWithText("历史会话").assertIsDisplayed()
+        compose.onNodeWithText("本地存储").assertIsDisplayed()
+        compose.onNodeWithText("0 个").assertIsDisplayed()
+        compose.onNodeWithTag("mine-recording").assertTextContains("未在记录", substring = true)
+        // 导入还没有实现，不画入口
+        compose.onNodeWithText("导入").assertDoesNotExist()
     }
 
     @Test
@@ -210,10 +230,86 @@ class MinePageTest {
         show()
         compose.onNodeWithTag("mine-detail-title").assertTextContains("外观")
         compose.onNodeWithTag("sw-keep").assertExists()
+        compose.onNodeWithTag("mine-row-display").performScrollTo()
         open("mine-row-display")
         compose.onNodeWithTag("mine-detail-title").assertTextContains("显示与格式")
         compose.onNodeWithTag("sw-hex").assertExists()
         compose.onNodeWithTag("sw-keep").assertDoesNotExist()
+    }
+
+    @Test
+    fun emptyHistorySaysSoAndFullStorageSaysRecordingStopped() {
+        show(history = EmptyMineHistory(RecordingState.STOPPED_STORAGE, 38L * 1024 * 1024))
+        compose.onNodeWithTag("mine-recording").assertTextContains("已停止记录", substring = true)
+        compose.onNodeWithText("空间不足，已停止写入。通信仍在进行。").assertIsDisplayed()
+        compose.onNodeWithTag("mine-storage-usage").assertTextContains("38 MB / 250 MB")
+        open("mine-history")
+        compose.onNodeWithTag("history-empty").assertIsDisplayed()
+        compose.onNodeWithText("还没有历史会话").assertIsDisplayed()
+    }
+
+    @Test
+    fun closedUnretainedSessionCanBeDeletedAndAKeptOneCannot() {
+        val history = EmptyMineHistory(
+            sessions = listOf(
+                HistorySession(1, "MASTER", "DEMO", 1, 1_700_000_000_000, null, false),
+                HistorySession(2, "SLAVE", "USB", 2, 1_700_000_100_000, 1_700_000_200_000, false),
+                HistorySession(3, "MASTER", "LAB", 3, 1_700_000_300_000, 1_700_000_400_000, true),
+            ),
+        )
+        show(history = history)
+        open("mine-history")
+        compose.onNodeWithText("主站 · 演示").assertIsDisplayed()
+        compose.onNodeWithText("进行中", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("history-delete-1").assertDoesNotExist()
+        compose.onNodeWithTag("history-delete-3").assertDoesNotExist()
+        compose.onNodeWithTag("history-delete-2").performScrollTo().performClick()
+        compose.onNodeWithTag("history-delete-confirm").performClick()
+        compose.waitForIdle()
+        compose.waitUntil(2_000) { history.deleted.contains(2L) }
+        compose.onNodeWithTag("history-delete-2").assertDoesNotExist()
+        compose.onNodeWithText("从站 · USB").assertDoesNotExist()
+    }
+
+    @Test
+    fun retentionAndCapacitySaveFromTheStoragePage() {
+        show()
+        compose.onNodeWithTag("mine-storage-manage").performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("history-retention").performScrollTo().assertTextContains("30 天")
+        open("history-retention")
+        compose.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextReplacement("7")
+        open("storage-save")
+        assertEquals(7, repository.settings.value.historyRetentionDays)
+        compose.onNodeWithTag("history-capacity").performScrollTo()
+        open("history-capacity")
+        compose.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextReplacement("0")
+        compose.onNodeWithTag("storage-save").assertIsNotEnabled()
+        compose.onNode(androidx.compose.ui.test.hasSetTextAction()).performTextReplacement("64")
+        open("storage-save")
+        assertEquals(64, repository.settings.value.historyCapacityMb)
+        compose.onNodeWithText("1 秒").performScrollTo().performClick()
+        compose.waitForIdle()
+        assertEquals(
+            io.github.xingyingyuzhui.modbusmobile.application.history.HistoryInterval.SEC_1,
+            repository.settings.value.historyInterval,
+        )
+    }
+
+    @Test
+    fun exportSheetSavesTheCheckedParts() {
+        val export = RecordingExport()
+        show(export = export)
+        open("mine-export")
+        compose.waitUntil(2_000) { compose.onAllNodesWithText("CSV · 14 个点位").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("导入").assertDoesNotExist()
+        compose.onNodeWithTag("export-part-TRAFFIC").performScrollTo().performClick()
+        open("export-save")
+        val saved = export.saved
+        assertEquals(
+            setOf(ArchivePart.PROJECT, ArchivePart.SLAVE, ArchivePart.POINTS, ArchivePart.HISTORY, ArchivePart.TRAFFIC),
+            saved,
+        )
     }
 
     // ---- 截图（Roborazzi 渲染，不是实机）----
@@ -242,4 +338,38 @@ class MinePageTest {
 private fun androidx.compose.ui.test.SemanticsNodeInteraction.assertIsNotEnabledOrNoToggle() {
     val config = fetchSemanticsNode().config
     check(!config.contains(androidx.compose.ui.semantics.SemanticsProperties.ToggleableState)) { "写入前确认不应是可切换项" }
+}
+
+private class EmptyMineHistory(
+    state: RecordingState = RecordingState.IDLE,
+    private val usage: Long = 0,
+    sessions: List<HistorySession> = emptyList(),
+) : HistoryCatalog {
+    private val rows = sessions.toMutableList()
+    override val recording: StateFlow<RecordingState> = MutableStateFlow(state)
+    val deleted = mutableListOf<Long>()
+
+    override suspend fun overview() = HistoryOverview(usage, rows.toList(), 0)
+
+    override suspend fun setRetained(id: Long, retained: Boolean) {
+        val index = rows.indexOfFirst { it.id == id }
+        if (index >= 0) rows[index] = rows[index].copy(retained = retained)
+    }
+
+    override suspend fun deleteClosed(id: Long): Boolean {
+        val session = rows.firstOrNull { it.id == id } ?: return false
+        if (session.retained || session.endedAtMs == null) return false
+        rows.removeAll { it.id == id }
+        deleted += id
+        return true
+    }
+
+    override suspend fun samples(sessionId: Long): List<HistorySample> = emptyList()
+}
+
+private class RecordingExport : MineExport {
+    var saved: Set<ArchivePart>? = null
+    override fun save(parts: Set<ArchivePart>) { saved = parts }
+    override fun share(parts: Set<ArchivePart>) = Unit
+    override suspend fun pointCount() = 14
 }

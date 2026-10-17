@@ -6,9 +6,12 @@ import io.github.xingyingyuzhui.modbusmobile.application.DefaultSessionManager
 import io.github.xingyingyuzhui.modbusmobile.application.SessionManager
 import io.github.xingyingyuzhui.modbusmobile.application.SettingsRepository
 import io.github.xingyingyuzhui.modbusmobile.application.TrafficRecorder
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryCatalog
 import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryPolicy
 import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryRecorder
+import io.github.xingyingyuzhui.modbusmobile.application.history.StoreHistoryCatalog
 import io.github.xingyingyuzhui.modbusmobile.application.history.room.RoomHistoryStore
+import io.github.xingyingyuzhui.modbusmobile.application.slave.FileSlaveSetupStore
 import io.github.xingyingyuzhui.modbusmobile.core.transport.SystemMonotonicClock
 import io.github.xingyingyuzhui.modbusmobile.usb.AndroidUsbStack
 import io.github.xingyingyuzhui.modbusmobile.usb.UsbDeviceRepository
@@ -30,6 +33,8 @@ class AppContainer(app: Application) {
     private val usb = withLocalSerialLab(AndroidUsbStack(app, repository, permissions, bridge), scope, clock)
     val settingsRepository: SettingsRepository = DataStoreSettingsRepository(app, scope)
     private val processStartedAtMs = System.currentTimeMillis()
+    private val projectDir = java.io.File(app.filesDir, "projects")
+    val slaveSetupStore = FileSlaveSetupStore(projectDir)
     private val historyStore = RoomHistoryStore(app)
     val historyRecorder = HistoryRecorder(
         store = historyStore,
@@ -44,11 +49,12 @@ class AppContainer(app: Application) {
         },
         nowMs = { System.currentTimeMillis() },
     )
+    val historyCatalog: HistoryCatalog = StoreHistoryCatalog(historyStore, historyRecorder)
     val sessionManager: SessionManager = DefaultSessionManager(
         scope,
         clock,
         usb,
-        slaveSetupStore = io.github.xingyingyuzhui.modbusmobile.application.slave.FileSlaveSetupStore(java.io.File(app.filesDir, "projects")),
+        slaveSetupStore = slaveSetupStore,
         history = historyRecorder,
     )
     val trafficRecorder = TrafficRecorder(sessionManager, scope)
@@ -77,5 +83,5 @@ class AppContainer(app: Application) {
     val panelRuntime = io.github.xingyingyuzhui.modbusmobile.application.panel.PanelRuntime(pointStore, pollScheduler, sampleHistory) { previewScope ->
         io.github.xingyingyuzhui.modbusmobile.application.panel.PointPreview(sessionManager, previewScope) { System.nanoTime() / 1_000_000L }
     }
-    val projectRepository = io.github.xingyingyuzhui.modbusmobile.application.panel.ProjectRepository(java.io.File(app.filesDir, "projects"))
+    val projectRepository = io.github.xingyingyuzhui.modbusmobile.application.panel.ProjectRepository(projectDir)
 }
