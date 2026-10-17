@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.roborazzi)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -70,6 +71,8 @@ dependencies {
     implementation(libs.core.ktx)
     implementation(libs.usb.serial)
     implementation(libs.datastore.preferences)
+    implementation(libs.room.runtime)
+    ksp(libs.room.compiler)
     implementation(libs.compose.material3.adaptive)
 
     debugImplementation(libs.compose.ui.test.manifest)
@@ -84,6 +87,10 @@ dependencies {
 
 roborazzi {
     outputDir.set(file("src/test/screenshots"))
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 tasks.withType<Test>().configureEach {

@@ -1,5 +1,8 @@
 package io.github.xingyingyuzhui.modbusmobile.application
 
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryInterval
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryPolicy
+
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class AccentColor(val argb: Long, val onAccentArgb: Long) {
@@ -58,6 +61,10 @@ data class UiSettings(
     /** 广播写之后等多久再发下一条（对应 SerialSettings.turnaroundMs）。 */
     val defaultBroadcastWaitMs: Long = DEFAULT_BROADCAST_WAIT_MS,
     val defaultEcho: EchoMode = EchoMode.OFF,
+    /** 历史快照间隔。曲线画面仍用内存环，这个值只控制落库。 */
+    val historyInterval: HistoryInterval = HistoryInterval.SEC_5,
+    val historyRetentionDays: Int = HistoryPolicy.DEFAULT_RETENTION_DAYS,
+    val historyCapacityMb: Int = HistoryPolicy.DEFAULT_CAPACITY_MB,
 ) {
     companion object {
         const val DEFAULT_RESPONSE_TIMEOUT_MS = 1_000L
@@ -84,6 +91,9 @@ internal object UiSettingKeys {
     const val DEF_INTERVAL = "default_inter_request_ms"
     const val DEF_BROADCAST = "default_broadcast_wait_ms"
     const val DEF_ECHO = "default_echo"
+    const val HISTORY_INTERVAL = "history_interval"
+    const val HISTORY_RETENTION_DAYS = "history_retention_days"
+    const val HISTORY_CAPACITY_MB = "history_capacity_mb"
 
     val booleans = setOf(KEEP, CURVE, VIBRATION, HEX, LOG_CRC_DIM, COIL_WARNING)
 }
@@ -106,6 +116,9 @@ fun UiSettings.toPreferenceMap(): Map<String, String> = mapOf(
     UiSettingKeys.DEF_INTERVAL to defaultInterRequestMs.toString(),
     UiSettingKeys.DEF_BROADCAST to defaultBroadcastWaitMs.toString(),
     UiSettingKeys.DEF_ECHO to defaultEcho.name,
+    UiSettingKeys.HISTORY_INTERVAL to historyInterval.name,
+    UiSettingKeys.HISTORY_RETENTION_DAYS to historyRetentionDays.toString(),
+    UiSettingKeys.HISTORY_CAPACITY_MB to historyCapacityMb.toString(),
 )
 
 fun uiSettingsFrom(map: Map<String, String>): UiSettings = UiSettings(
@@ -132,6 +145,17 @@ fun uiSettingsFrom(map: Map<String, String>): UiSettings = UiSettings(
         UiSettingKeys.DEF_BROADCAST, UiSettings.DEFAULT_BROADCAST_WAIT_MS, 0L..120_000L,
     ),
     defaultEcho = map.enum(UiSettingKeys.DEF_ECHO, EchoMode.OFF),
+    historyInterval = map.enum(UiSettingKeys.HISTORY_INTERVAL, HistoryInterval.SEC_5),
+    historyRetentionDays = map.int(
+        UiSettingKeys.HISTORY_RETENTION_DAYS,
+        HistoryPolicy.DEFAULT_RETENTION_DAYS,
+        HistoryPolicy.RETENTION_DAYS,
+    ),
+    historyCapacityMb = map.int(
+        UiSettingKeys.HISTORY_CAPACITY_MB,
+        HistoryPolicy.DEFAULT_CAPACITY_MB,
+        1..10_240,
+    ),
 )
 
 private inline fun <reified T : Enum<T>> Map<String, String>.enum(key: String, default: T): T {
@@ -145,3 +169,6 @@ private fun Map<String, String>.bool(key: String, default: Boolean): Boolean =
 /** 超出范围或不是整数就回默认值：连接页的校验是 1..120000 / ≥1，存进来的值不能比它更宽。 */
 private fun Map<String, String>.long(key: String, default: Long, range: LongRange): Long =
     this[key]?.toLongOrNull()?.takeIf { it in range } ?: default
+
+private fun Map<String, String>.int(key: String, default: Int, range: IntRange): Int =
+    this[key]?.toIntOrNull()?.takeIf { it in range } ?: default

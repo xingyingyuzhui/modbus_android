@@ -1,5 +1,7 @@
 package io.github.xingyingyuzhui.modbusmobile.application
 
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryInterval
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -24,6 +26,9 @@ class UiSettingsRoundTripTest {
             defaultInterRequestMs = 35,
             defaultBroadcastWaitMs = 400,
             defaultEcho = EchoMode.AUTO,
+            historyInterval = HistoryInterval.SEC_60,
+            historyRetentionDays = 7,
+            historyCapacityMb = 64,
         )
         assertEquals(original, uiSettingsFrom(original.toPreferenceMap()))
     }
@@ -37,6 +42,9 @@ class UiSettingsRoundTripTest {
         assertEquals(20L, d.defaultInterRequestMs)
         assertEquals(150L, d.defaultBroadcastWaitMs)
         assertEquals(EchoMode.OFF, d.defaultEcho)
+        assertEquals(HistoryInterval.SEC_5, d.historyInterval)
+        assertEquals(HistoryPolicy.DEFAULT_RETENTION_DAYS, d.historyRetentionDays)
+        assertEquals(HistoryPolicy.DEFAULT_CAPACITY_MB, d.historyCapacityMb)
         assertEquals(d, uiSettingsFrom(emptyMap()))
     }
 

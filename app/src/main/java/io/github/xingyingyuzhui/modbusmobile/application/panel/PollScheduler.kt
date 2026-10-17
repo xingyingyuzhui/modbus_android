@@ -1,6 +1,9 @@
 package io.github.xingyingyuzhui.modbusmobile.application.panel
 
 import io.github.xingyingyuzhui.modbusmobile.application.SessionManager
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryRecorder
+import io.github.xingyingyuzhui.modbusmobile.application.history.Observation
+import io.github.xingyingyuzhui.modbusmobile.application.history.SampleQuality
 import io.github.xingyingyuzhui.modbusmobile.application.SessionState
 import io.github.xingyingyuzhui.modbusmobile.core.model.ModbusResponse
 import io.github.xingyingyuzhui.modbusmobile.core.model.ModbusResult
@@ -39,6 +42,8 @@ class PollScheduler(
     private val wallMs: () -> Long = System::currentTimeMillis,
     /** 曲线用的样本历史（只记被 track 登记过的点位）；为空 = 不记录。 */
     private val history: SampleHistory? = null,
+    /** 落库记录。只入队，不在这次轮询里等待磁盘。 */
+    private val diskHistory: HistoryRecorder? = null,
 ) {
     private val points = MutableStateFlow<List<PointDefinition>>(emptyList())
     private val active = MutableStateFlow(false)
@@ -153,7 +158,34 @@ class PollScheduler(
         }
         store.apply(updates)
         recordHistory(updates)
+        offerDisk(updates)
         return backoff
+    }
+
+    private fun offerDisk(updates: Map<String, PointSnapshot>) {
+        val disk = diskHistory ?: return
+        val running = session.state.value as? SessionState.Running ?: return
+        if (running.role != Role.MASTER) return
+        val wall = wallMs()
+        for ((id, snap) in updates) {
+            val quality = when (snap.quality) {
+                Quality.OK -> SampleQuality.OK
+                Quality.STALE -> SampleQuality.STALE
+                Quality.TIMEOUT -> SampleQuality.TIMEOUT
+                Quality.ERROR -> SampleQuality.ERROR
+                Quality.NO_DATA -> continue
+            }
+            disk.offer(
+                running.epoch,
+                Observation(
+                    pointId = id,
+                    sampleAtMs = snap.updatedWallMs ?: wall,
+                    quality = quality,
+                    engineering = if (snap.quality == Quality.OK) snap.engineering else null,
+                    text = if (snap.quality == Quality.OK) snap.text else null,
+                ),
+            )
+        }
     }
 
     private fun recordHistory(updates: Map<String, PointSnapshot>) {

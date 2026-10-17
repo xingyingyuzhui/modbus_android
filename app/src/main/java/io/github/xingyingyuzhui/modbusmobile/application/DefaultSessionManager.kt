@@ -19,6 +19,8 @@ import io.github.xingyingyuzhui.modbusmobile.core.transport.ByteTransport
 import io.github.xingyingyuzhui.modbusmobile.core.transport.MonotonicClock
 import io.github.xingyingyuzhui.modbusmobile.core.transport.memory.InMemoryBus
 import kotlin.time.Duration.Companion.milliseconds
+import io.github.xingyingyuzhui.modbusmobile.application.history.HistoryRecorder
+import io.github.xingyingyuzhui.modbusmobile.application.history.historyTarget
 import io.github.xingyingyuzhui.modbusmobile.application.slave.MemorySlaveSetupStore
 import io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetup
 import io.github.xingyingyuzhui.modbusmobile.application.slave.SlaveSetupStore
@@ -49,6 +51,8 @@ class DefaultSessionManager(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     /** 从站配置（Unit、地址段、值、模拟规则）；从站会话开始时读，本地改动后由界面调 [saveSlaveSetup] 保存。 */
     private val slaveSetupStore: SlaveSetupStore = MemorySlaveSetupStore(),
+    private val wallMs: () -> Long = { System.currentTimeMillis() },
+    private val history: HistoryRecorder? = null,
 ) : SessionManager {
     private val usbStack = usb
     private val gate = Mutex()
@@ -70,6 +74,7 @@ class DefaultSessionManager(
     private var slaveSerial: SerialSettings? = null
 
     private var epochCounter = 0L
+    private var historyEpoch: Long? = null
     private var masterEngine: MasterEngine? = null
     private var slaveEngine: SlaveEngine? = null
     private var demoJob: Job? = null
@@ -210,6 +215,8 @@ class DefaultSessionManager(
         epochCounter += 1
         _serial.value = serial
         _state.value = SessionState.Running(role, target, epochCounter)
+        historyEpoch = epochCounter
+        history?.onSessionStarted(role.name, target.historyTarget(), epochCounter, wallMs())
     }
 
     private suspend fun runDemoMaster(master: MasterEngine) {
@@ -275,6 +282,10 @@ class DefaultSessionManager(
     }
 
     private suspend fun teardown() {
+        historyEpoch?.let { epoch ->
+            history?.onSessionEnded(epoch, wallMs())
+            historyEpoch = null
+        }
         _simulation.value?.close()
         _simulation.value = null
         _slaveUnits.value = emptyList()
